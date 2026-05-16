@@ -1,10 +1,7 @@
-"""
-plots.py – Produce the three diagnostic figures for the Hyades analysis.
-
-Figure 1 : Colour-magnitude diagram  (BP-RP vs absolute G)
-Figure 2 : Proper-motion vector diagram  (field grey, members coloured)
-Figure 3 : Parallax histogram  (full quality-cut sample + member peak)
-"""
+# makes the three figures for the Hyades analysis
+# fig 1: colour-magnitude diagram - basically an HR diagram using gaia colours
+# fig 2: proper motion plot - shows the cluster moving as a clump against the background stars
+# fig 3: parallax histogram - shows the cluster poking up as a spike in the distance distribution
 
 from pathlib import Path
 
@@ -16,27 +13,25 @@ import pandas as pd
 FIGURES_DIR = Path("figures")
 FIGURES_DIR.mkdir(exist_ok=True)
 
-# Colour scheme
-FIELD_COLOUR   = "#aaaaaa"
-MEMBER_COLOUR  = "#2166ac"   # blue
-MEMBER_CMAP    = "plasma"     # for CMD points coloured by parallax
+# colours used across all three plots
+FIELD_COLOUR   = "#aaaaaa"  # grey for background/field stars
+MEMBER_COLOUR  = "#2166ac"  # blue for cluster members
+MEMBER_CMAP    = "plasma"   # colour scale for CMD points (coloured by parallax)
 
+# clean up the default matplotlib style a bit
 plt.rcParams.update({
     "font.family": "sans-serif",
-    "axes.spines.top": False,
-    "axes.spines.right": False,
+    "axes.spines.top": False,    # remove the top border line
+    "axes.spines.right": False,  # remove the right border line
     "figure.dpi": 150,
 })
 
 
 def plot_cmd(members: pd.DataFrame, output: Path = FIGURES_DIR / "fig1_cmd.png") -> None:
-    """
-    Figure 1: Colour-magnitude diagram.
-
-    x-axis : BP-RP colour index (mag)
-    y-axis : Absolute G magnitude M_G (inverted so brighter = up)
-    Points are coloured by parallax to show the cluster depth.
-    """
+    # colour-magnitude diagram
+    # x axis is colour (blue-red), y axis is how intrinsically bright the star is
+    # the cluster should form a clear main sequence diagonal line
+    # we colour each point by its parallax to show the cluster has some physical depth
     fig, ax = plt.subplots(figsize=(6, 7))
 
     sc = ax.scatter(
@@ -54,10 +49,10 @@ def plot_cmd(members: pd.DataFrame, output: Path = FIGURES_DIR / "fig1_cmd.png")
     cbar = fig.colorbar(sc, ax=ax, pad=0.02)
     cbar.set_label("Parallax (mas)", fontsize=10)
 
-    ax.invert_yaxis()  # brighter stars at top (convention)
-    ax.set_xlabel("BP – RP  (mag)", fontsize=12)
+    ax.invert_yaxis()  # brighter stars go at the top by convention
+    ax.set_xlabel("BP - RP  (mag)", fontsize=12)
     ax.set_ylabel(r"$M_G$  (mag)", fontsize=12)
-    ax.set_title(f"Hyades — Colour-Magnitude Diagram\n({len(members):,} members)", fontsize=12)
+    ax.set_title(f"Hyades - Colour-Magnitude Diagram\n({len(members):,} members)", fontsize=12)
 
     fig.tight_layout()
     fig.savefig(output, bbox_inches="tight")
@@ -70,15 +65,12 @@ def plot_pm_diagram(
     members: pd.DataFrame,
     output: Path = FIGURES_DIR / "fig2_proper_motion.png",
 ) -> None:
-    """
-    Figure 2: Proper-motion vector diagram.
-
-    Background field sources (quality-cut but not members) are shown in grey.
-    Hyades members are overplotted in blue with a filled circle.
-    """
+    # proper motion diagram - each star is a dot at its (pmra, pmdec) coordinates
+    # the Hyades all move together so they show up as a tight clump
+    # field stars are spread all over the place
+    # if the field is huge we only plot 5000 of them so the plot doesn't get too crowded
     fig, ax = plt.subplots(figsize=(7, 6))
 
-    # Field stars (down-sampled to at most 5000 for clarity)
     n_field = min(5000, len(field))
     field_sample = field.sample(n=n_field, random_state=42) if len(field) > n_field else field
 
@@ -104,16 +96,16 @@ def plot_pm_diagram(
         zorder=3,
     )
 
-    # Annotate cluster centroid
+    # crosshairs showing where the cluster centre sits
     ax.axvline(members["pmra"].median(), color=MEMBER_COLOUR, lw=0.8, ls="--", alpha=0.6)
     ax.axhline(members["pmdec"].median(), color=MEMBER_COLOUR, lw=0.8, ls="--", alpha=0.6)
 
     ax.set_xlabel(r"$\mu_{\alpha*}$  (mas yr$^{-1}$)", fontsize=12)
     ax.set_ylabel(r"$\mu_\delta$  (mas yr$^{-1}$)", fontsize=12)
-    ax.set_title("Hyades — Proper-Motion Diagram", fontsize=12)
+    ax.set_title("Hyades - Proper-Motion Diagram", fontsize=12)
     ax.legend(fontsize=9, markerscale=2)
 
-    # Zoom to a window that shows both the field spread and the Hyades clump
+    # zoom in enough to see the cluster clump but also see how spread out the field is
     pmra_med  = members["pmra"].median()
     pmdec_med = members["pmdec"].median()
     ax.set_xlim(pmra_med  - 30, pmra_med  + 30)
@@ -130,12 +122,9 @@ def plot_parallax_histogram(
     members: pd.DataFrame,
     output: Path = FIGURES_DIR / "fig3_parallax_histogram.png",
 ) -> None:
-    """
-    Figure 3: Parallax histogram.
-
-    The full quality-cut sample (grey) is overlaid with the member sub-sample
-    (blue) to show the Hyades peak standing out from the field distribution.
-    """
+    # parallax histogram - shows all the quality-cut stars in grey
+    # and the cluster members in blue on top
+    # the Hyades should show up as a clear spike around 21.5 mas
     fig, ax = plt.subplots(figsize=(7, 5))
 
     bins = np.linspace(
@@ -150,7 +139,7 @@ def plot_parallax_histogram(
         color=FIELD_COLOUR,
         alpha=0.7,
         label=f"Quality-cut sample (n={len(quality_sample):,})",
-        density=True,
+        density=True,  # normalise so both histograms are on the same scale
     )
     ax.hist(
         members["parallax"],
@@ -161,14 +150,14 @@ def plot_parallax_histogram(
         density=True,
     )
 
-    # Mark the cluster median
+    # vertical line marking the median parallax of the cluster
     med_plx = members["parallax"].median()
     ax.axvline(med_plx, color=MEMBER_COLOUR, lw=1.5, ls="--",
                label=f"Member median: {med_plx:.1f} mas")
 
     ax.set_xlabel("Parallax  (mas)", fontsize=12)
     ax.set_ylabel("Normalised count  (density)", fontsize=12)
-    ax.set_title("Hyades — Parallax Distribution", fontsize=12)
+    ax.set_title("Hyades - Parallax Distribution", fontsize=12)
     ax.legend(fontsize=9)
 
     fig.tight_layout()

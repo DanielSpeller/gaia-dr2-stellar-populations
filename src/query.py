@@ -1,18 +1,9 @@
-"""
-query.py – Download Gaia DR2 data for the Hyades open cluster.
-
-We use the Hyades (not the Pleiades) because its large parallax (~21.5 mas,
-d ≈ 46.5 pc) and extreme proper motion (pmra ≈ +104, pmdec ≈ -28 mas/yr)
-make membership selection unambiguous and the cone search comfortable at
-10-degree radius without exceeding reasonable row counts.
-
-Note on query strategy
-----------------------
-The ESA Gaia TAP supports both synchronous (fast, ≤ a few thousand rows) and
-asynchronous jobs.  We push quality cuts into the ADQL WHERE clause so that
-the synchronous endpoint can handle the result comfortably without timing out.
-A retry with the async endpoint is attempted automatically if sync fails.
-"""
+# this file handles talking to the Gaia website and downloading the star data
+# we're looking at the Hyades cluster because it's close enough that its parallax
+# and how fast it's moving across the sky are really obvious - easy to spot in the data
+#
+# the Gaia website can be a bit flakey so we try the fast method first,
+# and if that times out we fall back to the slower queuing method
 
 from pathlib import Path
 import time
@@ -20,81 +11,86 @@ import time
 import pandas as pd
 from astroquery.gaia import Gaia
 
-# ── Cluster parameters ────────────────────────────────────────────────────────
-# Hyades centre from van Leeuwen (2009), propagated to J2015.5 (DR2 epoch)
-HYADES_RA_DEG     = 66.75   # degrees
-HYADES_DEC_DEG    = 16.87   # degrees
-SEARCH_RADIUS_DEG = 10.0    # captures core + first-generation tidal tails
+# where the Hyades cluster is in the sky, and how big a circle to search around it
+# the coordinates come from van Leeuwen 2009, adjusted to match the DR2 time reference
+HYADES_RA_DEG     = 66.75   # right ascension in degrees
+HYADES_DEC_DEG    = 16.87   # declination in degrees
+SEARCH_RADIUS_DEG = 10.0    # search radius - big enough to catch the outer edges of the cluster
 
-# Parallax window applied in ADQL (Hyades ≈ 21.5 mas; field stars are mostly
-# much nearer or much further, so this still leaves interesting context stars)
-PARALLAX_MIN_MAS = 12.0   # mas  (~83 pc upper distance limit)
-PARALLAX_MAX_MAS = 35.0   # mas  (~29 pc lower distance limit)
+# we only want stars that could plausibly be at the Hyades distance (~46 pc)
+# anything outside this parallax range is clearly too close or too far away
+PARALLAX_MIN_MAS = 12.0   # anything smaller than this is too far away
+PARALLAX_MAX_MAS = 35.0   # anything bigger than this is too close
 
 RAW_OUTPUT = Path("data/raw/hyades_gaia_dr2_raw.csv")
 
-# ── ADQL query ────────────────────────────────────────────────────────────────
-# Quality cuts are pushed into WHERE so the result fits in a synchronous job.
-# Inline comments explain every clause.
+# this is the actual query we send to the Gaia database
+# ADQL is basically SQL - SELECT picks the columns, WHERE filters the rows
 ADQL_QUERY = f"""
 SELECT TOP 50000
-    -- ── astrometry ───────────────────────────────────────────────────────
+    -- the star's position and how accurate the position measurement is
     source_id,
     ra, ra_error,
     dec, dec_error,
+    -- parallax is how much the star appears to shift as earth goes around the sun
+    -- bigger parallax = closer star. the Hyades should be around 21.5 mas
     parallax, parallax_error,
-    parallax_over_error,               -- SNR on parallax; require > 5
+    parallax_over_error,               -- parallax divided by its error, basically a signal-to-noise
+    -- proper motion = how fast the star is drifting across the sky year on year
+    -- the Hyades moves really fast (~104 mas/yr sideways) which makes it easy to find
     pmra, pmra_error,
     pmdec, pmdec_error,
-    -- ── astrometric quality flags ─────────────────────────────────────
-    astrometric_excess_noise,          -- residual noise after best-fit model
-    astrometric_excess_noise_sig,      -- how significant the residual is
-    visibility_periods_used,           -- independent observing windows
-    astrometric_chi2_al,               -- chi-squared of along-scan residuals
-    astrometric_n_good_obs_al,         -- number of good along-scan obs
-    -- ── photometry ───────────────────────────────────────────────────────
+    -- these tell us how good the position/motion measurements are
+    astrometric_excess_noise,          -- leftover noise after fitting the star's path - should be small
+    astrometric_excess_noise_sig,      -- how significant that leftover noise is
+    visibility_periods_used,           -- how many separate times Gaia observed this star
+    astrometric_chi2_al,               -- how well the measurements fit the model
+    astrometric_n_good_obs_al,         -- number of usable observations
+    -- brightness measurements in three colour bands: G (broad), BP (blue), RP (red)
     phot_g_mean_mag,
     phot_bp_mean_mag,
     phot_rp_mean_mag,
-    bp_rp,                             -- pre-computed BP-RP colour index
-    phot_g_mean_flux_over_error,       -- G-band photometric SNR
-    phot_bp_mean_flux_over_error,      -- BP-band photometric SNR
-    phot_rp_mean_flux_over_error,      -- RP-band photometric SNR
-    phot_bp_rp_excess_factor,          -- (flux_BP+flux_RP)/flux_G; flags blends
-    -- ── radial velocity (sparse in DR2) ──────────────────────────────
+    bp_rp,                             -- blue minus red colour, gaia already worked this out for us
+    phot_g_mean_flux_over_error,       -- how clearly we can measure the brightness in G
+    phot_bp_mean_flux_over_error,      -- same but blue band
+    phot_rp_mean_flux_over_error,      -- same but red band
+    phot_bp_rp_excess_factor,          -- if this is high the star might be two stars blended together
+    -- how fast the star is moving toward/away from us (only available for some stars in DR2)
     radial_velocity,
     radial_velocity_error
 FROM gaiadr2.gaia_source
 WHERE
-    -- Spatial cone centred on the Hyades (ADQL 2.0 geometry functions)
+    -- only grab stars inside a circle centred on the Hyades
     CONTAINS(
         POINT('ICRS', ra, dec),
         CIRCLE('ICRS', {HYADES_RA_DEG}, {HYADES_DEC_DEG}, {SEARCH_RADIUS_DEG})
     ) = 1
-    -- Require a 5-parameter astrometric solution (NULL ↔ no parallax fit)
+    -- skip stars where gaia couldn't measure a parallax or proper motion at all
     AND parallax IS NOT NULL
     AND pmra     IS NOT NULL
     AND pmdec    IS NOT NULL
-    -- Coarse parallax window: keeps stars at Hyades distance + context field
-    -- (~60 % row reduction vs no parallax cut, speeds up synchronous response)
+    -- rough distance filter - cuts out most of the unrelated background stars before we download
     AND parallax BETWEEN {PARALLAX_MIN_MAS} AND {PARALLAX_MAX_MAS}
-    -- Push basic quality cuts into ADQL to shrink the download further
-    AND parallax_over_error > 5            -- relative parallax error < 20 %
-    AND visibility_periods_used >= 7       -- at least 7 independent epochs
-    AND astrometric_excess_noise < 2.0     -- tolerate slight excess at ADQL level
-    AND phot_g_mean_flux_over_error > 20   -- require at least basic G-band SNR
+    -- basic quality filters in the query itself so we don't download junk we'd just throw away
+    AND parallax_over_error > 5            -- parallax needs to be at least 5x its own error
+    AND visibility_periods_used >= 7       -- star needs to have been seen at least 7 separate times
+    AND astrometric_excess_noise < 2.0     -- don't want stars with really messy position fits
+    AND phot_g_mean_flux_over_error > 20   -- need a half-decent brightness measurement
 """
 
 
 def _sync_query(verbose: bool = False) -> pd.DataFrame:
-    """Run as a synchronous TAP job (fast, works for small result sets)."""
+    # fast method - sends the query and waits right there for the answer
+    # works fine for smaller result sets but the server sometimes just kills it
     Gaia.ROW_LIMIT = 50000
     job = Gaia.launch_job(ADQL_QUERY, verbose=verbose)
     return job.get_results().to_pandas()
 
 
 def _async_query(verbose: bool = False) -> pd.DataFrame:
-    """Run as an asynchronous TAP job with retries (robust for larger results)."""
+    # slower method - submits the query as a job and polls until it's done
+    # more reliable for bigger queries, and survives temporary server hiccups
+    # tries up to 3 times with increasing waits between attempts
     Gaia.ROW_LIMIT = -1
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
@@ -105,21 +101,15 @@ def _async_query(verbose: bool = False) -> pd.DataFrame:
             print(f"[query] Async attempt {attempt}/{max_attempts} failed: {exc}")
             if attempt < max_attempts:
                 wait = 15 * attempt
-                print(f"[query] Waiting {wait}s before retry …")
+                print(f"[query] Waiting {wait}s before retry ...")
                 time.sleep(wait)
     raise RuntimeError("All async TAP attempts failed. Check ESA service status.")
 
 
 def download_raw(output_path: Path = RAW_OUTPUT, overwrite: bool = False) -> pd.DataFrame:
-    """
-    Submit the ADQL query to the ESA Gaia TAP service and return a DataFrame.
-
-    Tries the synchronous endpoint first (lower overhead); falls back to the
-    asynchronous endpoint with retries if the server returns an error.
-
-    The raw result is cached to *output_path* (gitignored data/raw/) so that
-    subsequent runs skip the network entirely.
-    """
+    # downloads the star data from Gaia and saves it to a csv file
+    # if the csv already exists we just load that instead of hitting the server again
+    # pass overwrite=True if you want fresh data
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -127,16 +117,17 @@ def download_raw(output_path: Path = RAW_OUTPUT, overwrite: bool = False) -> pd.
         print(f"[query] Raw cache found at {output_path} - loading from disk.")
         return pd.read_csv(output_path)
 
-    print("[query] Submitting ADQL query to ESA Gaia TAP …")
+    print("[query] Submitting ADQL query to ESA Gaia TAP ...")
     print(f"[query] Cone: RA={HYADES_RA_DEG} deg, Dec={HYADES_DEC_DEG} deg, r={SEARCH_RADIUS_DEG} deg")
 
     df = None
     try:
-        print("[query] Trying synchronous endpoint …")
+        print("[query] Trying synchronous endpoint ...")
         df = _sync_query()
         print(f"[query] Synchronous query succeeded: {len(df):,} rows.")
     except Exception as exc:
-        print(f"[query] Synchronous query failed ({exc}); switching to async …")
+        # sync timed out, try the async queue instead
+        print(f"[query] Synchronous query failed ({exc}); switching to async ...")
         df = _async_query()
         print(f"[query] Async query succeeded: {len(df):,} rows.")
 

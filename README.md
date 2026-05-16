@@ -1,48 +1,46 @@
 # gaia-dr2-stellar-populations
 
-Queries the ESA Gaia DR2 archive via ADQL and identifies members of the
-**Hyades open cluster** through astrometric and photometric selection.
+Downloads real star data from the Gaia space telescope and figures out which stars belong to the Hyades open cluster.
 
-The Hyades is chosen over the Pleiades because its large parallax (~21.5 mas,
-d ≈ 46.5 pc) and extreme proper motion (µα* ≈ +104, µδ ≈ −28 mas yr⁻¹) make
-membership identification unambiguous, and its ~10° sky footprint returns a
-comfortably-sized catalogue without row-limit issues.
+We use the Hyades rather than the Pleiades because the Hyades is close enough (~47 pc away) that its parallax is really obvious, and it moves across the sky unusually fast compared to background stars - so it's pretty easy to pick out which stars are actually in the cluster vs just happening to be in the same direction.
 
 ---
 
-## Quickstart
+## how to run it
 
 ```bash
-# 1. Create and activate a virtual environment (Python ≥ 3.11)
+# 1. create a virtual environment and activate it
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-# 2. Install dependencies
+# 2. install the dependencies
 pip install -r requirements.txt
 
-# 3. Run the full pipeline (~1–3 min depending on TAP latency)
+# 3. run the analysis (takes 1-3 min the first time while it downloads data)
 python run_analysis.py
 
-# Force a fresh download from ESA even if a local cache exists
+# if you want to re-download fresh data instead of using the cached version
 python run_analysis.py --fresh
 ```
 
-### Outputs
+## what it produces
 
-| Path | Description |
+| file | what it is |
 |---|---|
-| `data/raw/hyades_gaia_dr2_raw.csv` | Raw TAP result (gitignored) |
-| `data/processed/members.csv` | Cleaned member catalogue (committed) |
-| `figures/fig1_cmd.png` | Colour-magnitude diagram |
-| `figures/fig2_proper_motion.png` | Proper-motion vector diagram |
-| `figures/fig3_parallax_histogram.png` | Parallax histogram |
+| `data/raw/hyades_gaia_dr2_raw.csv` | the raw download from Gaia (not committed to git, it's big) |
+| `data/processed/members.csv` | the final list of cluster members |
+| `figures/fig1_cmd.png` | colour-magnitude diagram (like an HR diagram) |
+| `figures/fig2_proper_motion.png` | shows the cluster moving as a clump against background stars |
+| `figures/fig3_parallax_histogram.png` | shows the cluster as a spike in the distance distribution |
 
 ---
 
-## ADQL Query
+## the query we send to Gaia
+
+This is ADQL, which is basically SQL for astronomy databases. We send this to the Gaia archive and it sends back a table of stars.
 
 ```sql
-SELECT TOP 80000
+SELECT TOP 50000
     source_id,
     ra, ra_error, dec, dec_error,
     parallax, parallax_error, parallax_over_error,
@@ -59,84 +57,83 @@ SELECT TOP 80000
     radial_velocity, radial_velocity_error
 FROM gaiadr2.gaia_source
 WHERE
-    -- Spatial cone around the Hyades centre (van Leeuwen 2009, J2015.5)
+    -- grab everything inside a 10 degree circle centred on the Hyades
     CONTAINS(
         POINT('ICRS', ra, dec),
         CIRCLE('ICRS', 66.75, 16.87, 10.0)
     ) = 1
-    -- Require 5-parameter astrometric solution
+    -- skip stars where Gaia couldn't measure a parallax or proper motion
     AND parallax IS NOT NULL
     AND pmra     IS NOT NULL
     AND pmdec    IS NOT NULL
-    -- Pre-filter: keep only sources consistent with Hyades distance (12–35 mas)
+    -- rough distance filter to cut out most unrelated stars before downloading
     AND parallax BETWEEN 12.0 AND 35.0
+    -- basic quality filters so we don't download junk we'd throw away anyway
+    AND parallax_over_error > 5
+    AND visibility_periods_used >= 7
+    AND astrometric_excess_noise < 2.0
+    AND phot_g_mean_flux_over_error > 20
 ```
-
-The `CONTAINS/POINT/CIRCLE` geometry functions follow the ADQL 2.0 standard
-(IVOA 2008).  The coarse parallax window reduces download volume by ~60 %
-before Python-side cuts.
 
 ---
 
-## Membership Selection Criteria
+## how we decide which stars are actually in the cluster
 
-### 1. Quality cuts (applied in Python)
+We do it in three steps:
 
-| Cut | Threshold | Rationale |
+### step 1 - throw away bad measurements
+
+Some stars have noisy or unreliable measurements. We cut those out first.
+
+| what we check | threshold | why |
 |---|---|---|
-| `parallax_over_error` | > 5 | Parallax relative error < 20 % |
-| `astrometric_excess_noise` | < 1.0 mas | Residual astrometric noise; large values indicate unresolved binaries or bad solutions |
-| `astrometric_excess_noise_sig` | < 2.0 | Significance of the excess noise |
-| `visibility_periods_used` | ≥ 7 | Minimum independent-epoch constraint for a reliable solution |
-| `phot_g_mean_flux_over_error` | > 50 | Photometric SNR in G |
-| `phot_bp_mean_flux_over_error` | > 10 | Photometric SNR in BP |
-| `phot_rp_mean_flux_over_error` | > 10 | Photometric SNR in RP |
-| `phot_bp_rp_excess_factor` | < 1.6 | Flags blended sources or photometric artefacts |
+| `parallax_over_error` | > 5 | parallax needs to be at least 5x its own error, otherwise it's basically noise |
+| `astrometric_excess_noise` | < 1.0 mas | if there's this much leftover noise in the position fit, something's off |
+| `astrometric_excess_noise_sig` | < 2.0 | how statistically significant that noise is |
+| `visibility_periods_used` | >= 7 | needs to have been observed at least 7 separate times |
+| `phot_g_mean_flux_over_error` | > 50 | brightness in the main band needs to be well measured |
+| `phot_bp_mean_flux_over_error` | > 10 | same for blue and red bands |
+| `phot_rp_mean_flux_over_error` | > 10 | |
+| `phot_bp_rp_excess_factor` | < 1.6 | if this is high the "star" is probably two stars on top of each other |
 
-### 2. Proper-motion and parallax box
+### step 2 - keep only stars moving like the Hyades
 
-A generous bounding box isolates the Hyades locus before sigma-clipping:
+The Hyades moves really fast across the sky compared to most stars. We draw a box around the expected proper motion and parallax of the cluster and throw everything outside it away.
 
-| Parameter | Range |
+| measurement | range we keep |
 |---|---|
-| `pmra` | 85 – 125 mas yr⁻¹ |
-| `pmdec` | −45 – −10 mas yr⁻¹ |
-| `parallax` | 16 – 27 mas |
+| `pmra` (sideways motion) | 85 to 125 mas/yr |
+| `pmdec` (up/down motion) | -45 to -10 mas/yr |
+| `parallax` (distance) | 16 to 27 mas |
 
-### 3. Iterative 3σ clipping
+### step 3 - sigma clipping to tighten it up
 
-Starting from the box-selected candidates, the median and MAD-based σ of
-(pmra, pmdec, parallax) are recomputed each iteration and sources outside
-3σ are rejected.  The loop converges when no further sources are removed
-(typically 3–5 iterations).
+We repeatedly compute the average and spread of the remaining stars, remove anything more than 3 standard deviations away, and repeat until nothing gets removed. Usually takes about 5 rounds. This is a standard way to iteratively remove outliers.
 
-### Absolute magnitude
+### working out actual brightness
 
-Computed from the measured parallax as:
+To plot the colour-magnitude diagram we need to know how bright each star actually is, not just how bright it looks from Earth. We use the parallax (which tells us the distance) to correct for that:
 
 ```
-M_G = G + 5 + 5 × log₁₀(π / 1000)
-    = G + 5 × log₁₀(π) − 10
+absolute magnitude = apparent magnitude + 5 + 5 * log10(parallax / 1000)
 ```
-
-where π is the parallax in mas.
 
 ---
 
-## Repository structure
+## files in this repo
 
 ```
 .
-├── run_analysis.py          # Entry-point – runs the full pipeline
-├── requirements.txt
+├── run_analysis.py       # run this to do the whole analysis
+├── requirements.txt      # python packages needed
 ├── src/
-│   ├── query.py             # ADQL query & TAP download
-│   ├── membership.py        # Quality cuts & membership selection
-│   └── plots.py             # Three diagnostic figures
+│   ├── query.py          # builds the query and downloads data from Gaia
+│   ├── membership.py     # quality cuts and membership selection
+│   └── plots.py          # makes the three figures
 ├── data/
-│   ├── raw/                 # gitignored – large downloads
+│   ├── raw/              # downloaded data goes here (gitignored)
 │   └── processed/
-│       └── members.csv      # Committed output
+│       └── members.csv   # the final member list
 └── figures/
     ├── fig1_cmd.png
     ├── fig2_proper_motion.png
@@ -145,11 +142,11 @@ where π is the parallax in mas.
 
 ---
 
-## References
+## papers this is based on
 
-- Gaia Collaboration et al. (2016) – Gaia mission description. *A&A* 595, A1.
-- Gaia Collaboration et al. (2018a) – DR2 summary. *A&A* 616, A1.
-- Gaia Collaboration et al. (2018b) – Hertzsprung-Russell diagram. *A&A* 616, A10.
-- van Leeuwen (2009) – Hipparcos Hyades distance. *A&A* 497, 209.
-- Lindegren et al. (2018) – DR2 astrometry. *A&A* 616, A2.
-- Arenou et al. (2018) – DR2 catalogue validation. *A&A* 616, A17.
+- Gaia Collaboration (2016) - overview of the Gaia mission. *A&A* 595, A1
+- Gaia Collaboration (2018a) - the DR2 data release. *A&A* 616, A1
+- Gaia Collaboration (2018b) - HR diagrams from DR2. *A&A* 616, A10
+- van Leeuwen (2009) - Hyades distance from Hipparcos. *A&A* 497, 209
+- Lindegren et al. (2018) - how the DR2 astrometry was done. *A&A* 616, A2
+- Arenou et al. (2018) - quality checks on DR2. *A&A* 616, A17
