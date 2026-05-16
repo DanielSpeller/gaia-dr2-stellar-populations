@@ -1,0 +1,22 @@
+# Claude dev environment
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Data – raw downloads are large and reproducible; keep processed outputs
+data/raw/
+*.fits
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
