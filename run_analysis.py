@@ -35,7 +35,7 @@ MEMBERS_CSV   = PROCESSED_DIR / "members.csv"
 
 def main(fresh: bool = False) -> None:
     print("=" * 60)
-    print("  Gaia DR2 – Hyades Open Cluster Analysis")
+    print("  Gaia DR2 - Hyades Open Cluster Analysis")
     print("=" * 60)
 
     # ── Step 1: Download (or load cache) ─────────────────────────────────────
@@ -49,7 +49,7 @@ def main(fresh: bool = False) -> None:
     members_df = select_members(raw_df)
 
     if len(members_df) == 0:
-        print("[main] ERROR: no members found – check membership thresholds.")
+        print("[main] ERROR: no members found - check membership thresholds.")
         sys.exit(1)
 
     # ── Step 4: Save processed catalogue ─────────────────────────────────────
@@ -58,11 +58,11 @@ def main(fresh: bool = False) -> None:
     print(f"\n[main] Member catalogue saved to {MEMBERS_CSV} ({len(members_df):,} rows)")
 
     # Print a brief summary
-    print("\n── Membership summary ──────────────────────────────────────────")
+    print("\n-- Membership summary ------------------------------------------")
     for col, unit in [("parallax", "mas"), ("pmra", "mas/yr"), ("pmdec", "mas/yr")]:
         med = members_df[col].median()
         std = members_df[col].std()
-        print(f"  {col:20s}: median={med:8.3f} {unit},  σ={std:.3f}")
+        print(f"  {col:20s}: median={med:8.3f} {unit},  sd={std:.3f}")
     print(f"  {'distance (pc)':20s}: median={1000/members_df['parallax'].median():.1f} pc")
     print()
 

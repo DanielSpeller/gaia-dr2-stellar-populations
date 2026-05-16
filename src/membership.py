@@ -72,7 +72,7 @@ def apply_quality_cuts(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     result = df[mask].copy()
-    print(f"[membership] Quality cuts: {n0:,} → {len(result):,} sources retained.")
+    print(f"[membership] Quality cuts: {n0:,} -> {len(result):,} sources retained.")
     return result
 
 
@@ -85,7 +85,7 @@ def apply_pm_parallax_box(df: pd.DataFrame) -> pd.DataFrame:
         & (df["parallax"] >= PARALLAX_BOX_MIN) & (df["parallax"] <= PARALLAX_BOX_MAX)
     )
     result = df[mask].copy()
-    print(f"[membership] PM+parallax box:  {n0:,} → {len(result):,} candidates.")
+    print(f"[membership] PM+parallax box:  {n0:,} -> {len(result):,} candidates.")
     return result
 
 
@@ -115,7 +115,7 @@ def sigma_clip_members(df: pd.DataFrame) -> pd.DataFrame:
             mask[df.index.get_indexer(idx[drop])] = False
 
         n_after = mask.sum()
-        print(f"[membership] Sigma-clip iter {iteration + 1}: {n_before} → {n_after}")
+        print(f"[membership] Sigma-clip iter {iteration + 1}: {n_before} -> {n_after}")
         if n_after == n_before:
             break  # converged
 
